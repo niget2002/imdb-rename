@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -332,21 +333,30 @@ impl Renamer {
 
         // Otherwise, try to figure out the "right" name by constructing a
         // query from the candidate and searching IMDb.
-        let query = self
-            .name_query(&candidate.title)
-            .year_ge(candidate.year)
-            .year_le(candidate.year)
-            // Basically include every kind except for episode and video games.
-            // This helps filter out a lot of noise.
-            .kind(TitleKind::Movie)
-            .kind(TitleKind::Short)
-            .kind(TitleKind::TVMiniSeries)
-            .kind(TitleKind::TVMovie)
-            .kind(TitleKind::TVSeries)
-            .kind(TitleKind::TVShort)
-            .kind(TitleKind::TVSpecial)
-            .kind(TitleKind::Video)
-            .votes_ge(self.min_votes);
+        let query =
+            if candidate.year == 1000 {
+                self
+                    .name_query(&candidate.title)
+                    // Basically include every kind except for episode and video games.
+                    // This helps filter out a lot of noise.
+                    .kind(TitleKind::Movie)
+                    .kind(TitleKind::Short)
+                    .kind(TitleKind::TVMovie)
+                    .kind(TitleKind::Video)
+                    .votes_ge(self.min_votes)
+            } else {
+                self
+                    .name_query(&candidate.title)
+                    .year_ge(candidate.year)
+                    .year_le(candidate.year)
+                    // Basically include every kind except for episode and video games.
+                    // This helps filter out a lot of noise.
+                    .kind(TitleKind::Movie)
+                    .kind(TitleKind::Short)
+                    .kind(TitleKind::TVMovie)
+                    .kind(TitleKind::Video)
+                    .votes_ge(self.min_votes)
+            };
         log::debug!("automatic 'any' query: {:?}", query);
         self.choose_one(searcher, &query)
     }
@@ -453,7 +463,7 @@ impl Renamer {
     fn candidate(&self, path: &Path) -> anyhow::Result<Candidate> {
         let cpath = CandidatePath::from_path(path)?;
         let name = cpath.base_name.clone();
-
+        let mut stdout = io::stdout();
         if let Some(cepisode) = self.episode_parts(&cpath)? {
             return Ok(Candidate {
                 path: cpath,
@@ -461,21 +471,27 @@ impl Renamer {
             });
         }
 
+        writeln!(stdout, "Testing Movie:: {}", name)?;
+        stdout.flush()?;
+
         let caps_year = match self.year.captures(&name) {
             None => {
+                let year = 1000;
+                let title = name.to_string();
                 return Ok(Candidate {
                     path: cpath,
-                    kind: CandidateKind::Unknown,
+                    kind: CandidateKind::Any(CandidateAny { title, year }),
                 })
             }
             Some(caps) => caps,
         };
+
         let mat_year = match caps_year.name("year") {
             None => anyhow::bail!("missing 'year' group in: {}", self.year),
             Some(mat) => mat,
         };
         let year = mat_year.as_str().parse()?;
-        let title = name[..mat_year.start()].to_string();
+        let title = name[..mat_year.start()].to_string();        
         Ok(Candidate {
             path: cpath,
             kind: CandidateKind::Any(CandidateAny { title, year }),
@@ -698,7 +714,7 @@ impl CandidatePath {
             ),
             None => match ent.title().start_year {
                 None => ent.title().title.to_string(),
-                Some(year) => format!("{} ({})", ent.title().title, year),
+                Some(year) => format!("{}.{}", ent.title().title.replace(|c: char| !c.is_alphanumeric(), "_"), year),
             },
         };
         match self.ext {
